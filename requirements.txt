@@ -1,1 +1,4 @@
 aiogram
+aiofiles
+sqlite3  
+asyncio  
