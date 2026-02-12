@@ -13,7 +13,6 @@ from aiogram.client.default import DefaultBotProperties
 
 logging.basicConfig(level=logging.INFO)
 
-# CONFIG
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
@@ -27,7 +26,6 @@ class AdminStates(StatesGroup):
     waiting_bc_text = State()
     waiting_tagall_text = State()
 
-# ANTI SPAM
 user_spam_data = defaultdict(lambda: {'count': 0, 'last_reset': 0})
 warn_count = {}
 CHAT_COOLDOWN = 2
@@ -48,7 +46,6 @@ def reset_spam_counter(user_id: int):
     user_spam_data[user_id]['count'] = 0
     user_spam_data[user_id]['last_reset'] = time.time()
 
-# DATABASE
 def db_query(query, params=(), fetch=False):
     conn = sqlite3.connect("database.db")
     curr = conn.cursor()
@@ -62,7 +59,6 @@ def init_db():
     db_query("CREATE TABLE IF NOT EXISTS filters (word TEXT UNIQUE)")
     db_query("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
     db_query("CREATE TABLE IF NOT EXISTS group_logs (group_id TEXT PRIMARY KEY, log_chat_id TEXT)")
-    db_query("CREATE TABLE IF NOT EXISTS mutes (user_id INTEGER, group_id TEXT, until TIMESTAMP, reason TEXT)")
     db_query("INSERT OR IGNORE INTO settings (key, value) VALUES ('group_id', '0')")
     db_query("INSERT OR IGNORE INTO settings (key, value) VALUES ('welcome_text', 'Selamat datang!')")
     db_query("INSERT OR IGNORE INTO settings (key, value) VALUES ('welcome_btn', 'Join|https://t.me/telegram')")
@@ -81,20 +77,16 @@ async def send_to_log(group_id: str, text: str):
         except:
             pass
 
-async def clean_expired_mutes():
-    db_query("DELETE FROM mutes WHERE until < CURRENT_TIMESTAMP")
-
 async def do_tag_all(gid: str, text: str):
     try:
         await bot.send_message(int(gid), f"{text}\n\n🔔 <b>@all</b>", parse_mode="HTML")
         await send_to_log(gid, f"🔔 **TAG ALL** dari Admin:\n<code>{text[:100]}...</code>")
         return True
-    except Exception as e:
+    except:
         await bot.send_message(int(gid), text)
-        await send_to_log(gid, f"📢 **TAG ALL** dari Admin:\n<code>{text[:100]}...</code>")
+        await send_to_log(gid, f"📢 **TAG ALL**:\n<code>{text[:100]}...</code>")
         return False
 
-# ADMIN MENU
 @dp.message(Command("start"), F.chat.type == "private")
 async def admin_menu(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
@@ -107,84 +99,79 @@ async def admin_menu(message: types.Message):
         [InlineKeyboardButton(text="📊 Group Logs", callback_data="group_logs")],
         [InlineKeyboardButton(text="💾 Send DB", callback_data="send_db")]
     ])
-    await message.answer("🛡️ **Super Admin Panel**", reply_markup=kb)
+    await message.answer("🛡️ **ADMIN PANEL**", reply_markup=kb)
 
-# TAG ALL
 @dp.callback_query(F.data == "tagall")
-async def start_tagall(callback: types.CallbackQuery, state: FSMContext):
+async def tagall_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID: return
-    await callback.message.answer("🔔 Kirim pesan untuk **TAG ALL**:")
+    await callback.message.answer("🔔 Kirim pesan TAG ALL:")
     await state.set_state(AdminStates.waiting_tagall_text)
     await callback.answer()
 
 @dp.message(AdminStates.waiting_tagall_text)
-async def do_tag_all_exec(message: types.Message, state: FSMContext):
+async def tagall_exec(message: types.Message, state: FSMContext):
     gid = db_query("SELECT value FROM settings WHERE key = 'group_id'", fetch=True)[0][0]
     await do_tag_all(gid, message.text)
-    await message.answer("✅ Tag All dikirim!")
+    await message.answer("✅ **TAG ALL** berhasil!")
     await state.clear()
 
-# BROADCAST
 @dp.callback_query(F.data == "bc")
-async def start_bc(callback: types.CallbackQuery, state: FSMContext):
+async def bc_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer("📢 Kirim pesan broadcast:")
     await state.set_state(AdminStates.waiting_bc_text)
     await callback.answer()
 
 @dp.message(AdminStates.waiting_bc_text)
-async def do_broadcast(message: types.Message, state: FSMContext):
+async def bc_exec(message: types.Message, state: FSMContext):
     gid = db_query("SELECT value FROM settings WHERE key = 'group_id'", fetch=True)[0][0]
     try:
         await bot.send_message(gid, message.text)
-        await send_to_log(gid, f"📢 **Broadcast**:\n<code>{message.text[:100]}...</code>")
-        await message.answer("✅ Broadcast berhasil!")
+        await send_to_log(gid, f"📢 **BROADCAST**:\n<code>{message.text[:100]}...</code>")
+        await message.answer("✅ Broadcast OK!")
     except Exception as e:
-        await message.answer(f"❌ Error: {e}")
+        await message.answer(f"❌ {e}")
     await state.clear()
 
-# SET GROUP
 @dp.message(Command("setgrup"))
-async def set_group_id(message: types.Message):
+async def set_group(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
     gid = str(message.chat.id)
     db_query("UPDATE settings SET value = ? WHERE key = 'group_id'", (gid,))
-    await send_to_log(gid, f"✅ **Grup registered**")
-    await message.answer(f"✅ Grup: {gid}")
+    await send_to_log(gid, "✅ **Grup registered**")
+    await message.answer(f"✅ Grup ID: <code>{gid}</code>", parse_mode="HTML")
 
-# WELCOME (FIXED)
 @dp.callback_query(F.data == "set_welcome")
-async def start_welcome(callback: types.CallbackQuery, state: FSMContext):
+async def welcome_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID: return
-    await callback.message.answer("📝 Kirim teks welcome:\n<u>Contoh:</u> Selamat datang!")
+    await callback.message.answer("📝 Kirim teks welcome baru:")
     await state.set_state(AdminStates.waiting_welcome_text)
     await callback.answer()
 
 @dp.message(AdminStates.waiting_welcome_text)
-async def save_welcome_text(message: types.Message, state: FSMContext):
+async def welcome_text_save(message: types.Message, state: FSMContext):
     db_query("UPDATE settings SET value = ? WHERE key = 'welcome_text'", (message.text,))
-    await message.answer("✅ Teks OK!\nKirim tombol: <code>Nama|https://t.me/channel</code>")
+    await message.answer("✅ Teks saved!\n\nKirim tombol: <code>Nama|https://link</code>")
     await state.set_state(AdminStates.waiting_welcome_btn)
 
 @dp.message(AdminStates.waiting_welcome_btn)
-async def save_welcome_btn(message: types.Message, state: FSMContext):
-    btn_data = message.text.strip().split("|")
-    if len(btn_data) != 2 or not btn_data[1].startswith(("http://", "https://")):
-        await message.answer("❌ Format: <code>Nama|https://link</code>")
+async def welcome_btn_save(message: types.Message, state: FSMContext):
+    parts = message.text.split("|")
+    if len(parts) != 2:
+        await message.answer("❌ Format: Nama|https://link")
         return
     db_query("UPDATE settings SET value = ? WHERE key = 'welcome_btn'", (message.text,))
-    await message.answer("✅ Welcome diupdate!")
+    await message.answer("✅ Welcome updated!")
     await state.clear()
 
-# FILTER
 @dp.callback_query(F.data == "set_filter")
-async def start_filter(callback: types.CallbackQuery, state: FSMContext):
+async def filter_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID: return
     await callback.message.answer("🚫 Kirim kata filter:")
     await state.set_state(AdminStates.waiting_filter_word)
     await callback.answer()
 
 @dp.message(AdminStates.waiting_filter_word)
-async def save_filter(message: types.Message, state: FSMContext):
+async def filter_save(message: types.Message, state: FSMContext):
     word = message.text.lower()
     try:
         db_query("INSERT INTO filters (word) VALUES (?)", (word,))
@@ -193,87 +180,101 @@ async def save_filter(message: types.Message, state: FSMContext):
         await message.answer("❌ Sudah ada!")
     await state.clear()
 
-# WELCOME JOIN (SAFE)
-@dp.chat_member()
-async def on_user_join(event: types.ChatMemberUpdated):
-    gid = str(event.chat.id)
-    if get_group_log_chat(gid) == "0":
-        target = db_query("SELECT value FROM settings WHERE key = 'group_id'", fetch=True)[0][0]
-        if gid != target: return
+@dp.callback_query(F.data == "group_logs")
+async def logs_menu(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID: return
+    logs = db_query("SELECT * FROM group_logs", fetch=True)
+    text = "📊 **Logs:**\n\n"
+    for g, l in logs:
+        text += f"• {g} → <code>{l}</code>\n"
+    if not logs:
+        text += "Belum ada log"
+    await callback.message.answer(text, parse_mode="HTML")
+    await callback.answer()
 
-    if event.new_chat_member.status == "member":
+@dp.callback_query(F.data == "send_db")
+async def send_db(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID: return
+    await bot.send_document(ADMIN_ID, FSInputFile("database.db"), caption="💾 DB Backup")
+    await callback.answer()
+
+@dp.callback_query(F.data == "guide_group")
+async def guide(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID: return
+    text = """📋 **Setup Guide:**
+
+1. Bot → ADMIN di grup
+2. `/setgrup` di grup
+3. `/setlog [ID]` untuk log
+4. ✅ Selesai!"""
+    await callback.message.answer(text)
+    await callback.answer()
+
+@dp.message(Command("setlog"))
+async def set_log_cmd(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    gid = str(message.chat.id)
+    logid = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else "0"
+    db_query("INSERT OR REPLACE INTO group_logs VALUES (?, ?)", (gid, logid))
+    await message.answer(f"✅ Log set: <code>{logid}</code>")
+
+@dp.chat_member()
+async def welcome_new_member(event: types.ChatMemberUpdated):
+    gid = str(event.chat.id)
+    target_group = db_query("SELECT value FROM settings WHERE key = 'group_id'", fetch=True)[0][0]
+    if gid != target_group: return
+    
+    if event.new_chat_member.status == "member" and event.old_chat_member.status != "member":
         user = event.new_chat_member.user
         mention = f'<a href="tg://user?id={user.id}">{user.full_name}</a>'
-        username = f"@{user.username}" if user.username else "No @"
         
         txt = db_query("SELECT value FROM settings WHERE key = 'welcome_text'", fetch=True)[0][0]
         btn_raw = db_query("SELECT value FROM settings WHERE key = 'welcome_btn'", fetch=True)[0][0]
         
         kb = None
-        btn_parts = btn_raw.split("|")
-        if len(btn_parts) == 2:
-            name, url = [x.strip() for x in btn_parts]
-            if url.startswith(("http://", "https://")):
-                kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=name, url=url)]])
+        if "|" in btn_raw:
+            name, url = btn_raw.split("|")
+            kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=name.strip(), url=url.strip())]])
         
         try:
-            msg = await bot.send_message(event.chat.id, f"👋 {mention}!\n\n{username}\n\n{txt}", reply_markup=kb)
-            await send_to_log(gid, f"👋 **New Member**\n{mention}\n{username}")
+            msg = await bot.send_message(event.chat.id, f"👋 {mention}!\n\n{txt}", reply_markup=kb, parse_mode="HTML")
             await asyncio.sleep(10)
             await bot.delete_message(event.chat.id, msg.message_id)
         except:
             pass
 
-# SECURITY (SAFE)
 @dp.message(F.chat.type.in_({"group", "supergroup"}))
-async def security_monitor(message: types.Message):
+async def security_filter(message: types.Message):
     gid = str(message.chat.id)
-    if get_group_log_chat(gid) == "0":
-        target = db_query("SELECT value FROM settings WHERE key = 'group_id'", fetch=True)[0][0]
-        if gid != target: return
+    target_group = db_query("SELECT value FROM settings WHERE key = 'group_id'", fetch=True)[0][0]
+    if gid != target_group: return
     
     uid = message.from_user.id
-    if uid == ADMIN_ID or message.from_user.is_bot:
-        return
+    if uid == ADMIN_ID or message.from_user.is_bot: return
     
     if check_spam(uid):
-        try: await message.delete()
-        except: pass
+        try:
+            await message.delete()
+        except:
+            pass
         return
     
     text = (message.text or "").lower()
-    banned = [w[0] for w in db_query("SELECT word FROM filters", fetch=True)]
-    if any(w in text for w in banned):
-        try: await message.delete()
-        except: pass
+    filters = [w[0] for w in db_query("SELECT word FROM filters", fetch=True)]
+    if any(f in text for f in filters):
+        try:
+            await message.delete()
+        except:
+            pass
         return
     
-    # Auto clean
-    if message.service or message.sticker:
-        try: await message.delete()
-        except: pass
-
-# OTHER MENUS (SHORT)
-@dp.callback_query(F.data.in_(["guide_group", "group_logs", "send_db"]))
-async def quick_menus(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID: return
-    await callback.answer("Fitur coming soon!")
-    
-@dp.message(Command("setlog"))
-async def set_log(message: types.Message):
-    if message.from_user.id != ADMIN_ID: return
-    gid = str(message.chat.id)
-    logid = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else "0"
-    db_query("INSERT OR REPLACE INTO group_logs VALUES (?, ?)", (gid, logid))
-    await message.answer(f"✅ Log: {logid}")
-
-async def cleanup_task():
-    while True:
-        await clean_expired_mutes()
-        await asyncio.sleep(300)
+    if message.sticker or message.service:
+        try:
+            await message.delete()
+        except:
+            pass
 
 async def main():
-    asyncio.create_task(cleanup_task())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
