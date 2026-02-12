@@ -2,17 +2,17 @@ import os
 import sqlite3
 import asyncio
 import logging
-import time
-from collections import defaultdict
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command, ChatMemberUpdatedFilter, JOIN_TRANSITION
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, ChatPermissions
+from aiogram.filters import Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.client.default import DefaultBotProperties
 
-# --- CONFIG ---
+# --- SETUP LOGGING ---
 logging.basicConfig(level=logging.INFO)
+
+# --- CONFIG DARI RAILWAY ---
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
@@ -25,194 +25,204 @@ class AdminStates(StatesGroup):
     waiting_welcome_btn = State()
     waiting_filter_word = State()
     waiting_bc_text = State()
-    waiting_tagall_text = State()
 
-# --- GLOBAL VARS & CACHE ---
-FILTER_CACHE = set()
-SETTINGS_CACHE = {}
-user_violations = defaultdict(int)
-user_spam_data = defaultdict(lambda: {'count': 0, 'last_reset': 0})
-
-# --- DATABASE ENGINE ---
-def _execute_query(query, params=(), fetch=False):
+# --- DATABASE SYSTEM ---
+def db_query(query, params=(), fetch=False):
     conn = sqlite3.connect("database.db")
     curr = conn.cursor()
-    try:
-        curr.execute(query, params)
-        data = curr.fetchall() if fetch else None
-        conn.commit()
-        return data
-    finally:
-        conn.close()
+    curr.execute(query, params)
+    data = curr.fetchall() if fetch else None
+    conn.commit()
+    conn.close()
+    return data
 
-async def db_query(query, params=(), fetch=False):
-    return await asyncio.to_thread(_execute_query, query, params, fetch)
+def init_db():
+    db_query("CREATE TABLE IF NOT EXISTS filters (word TEXT UNIQUE)")
+    db_query("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+    db_query("INSERT OR IGNORE INTO settings (key, value) VALUES ('group_id', '0')")
+    db_query("INSERT OR IGNORE INTO settings (key, value) VALUES ('log_group_id', '0')")
+    db_query("INSERT OR IGNORE INTO settings (key, value) VALUES ('welcome_text', 'Selamat datang!')")
+    db_query("INSERT OR IGNORE INTO settings (key, value) VALUES ('welcome_btn', 'Join Channel|https://t.me/telegram')")
 
-async def refresh_cache():
-    global FILTER_CACHE, SETTINGS_CACHE
-    f = await db_query("SELECT word FROM filters", fetch=True)
-    FILTER_CACHE = {r[0] for r in f} if f else set()
-    s = await db_query("SELECT key, value FROM settings", fetch=True)
-    SETTINGS_CACHE = {r[0]: r[1] for r in s} if s else {}
+init_db()
 
-async def init_db():
-    await db_query("CREATE TABLE IF NOT EXISTS filters (word TEXT UNIQUE)")
-    await db_query("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
-    await db_query("CREATE TABLE IF NOT EXISTS group_logs (group_id TEXT PRIMARY KEY, log_chat_id TEXT)")
-    await db_query("INSERT OR IGNORE INTO settings (key, value) VALUES ('group_id', '0')")
-    await db_query("INSERT OR IGNORE INTO settings (key, value) VALUES ('welcome_text', 'Selamat datang!')")
-    await db_query("INSERT OR IGNORE INTO settings (key, value) VALUES ('welcome_btn', '0')")
-    await refresh_cache()
-
-# --- HELPERS ---
-async def send_to_log(group_id, text):
-    res = await db_query("SELECT log_chat_id FROM group_logs WHERE group_id = ?", (str(group_id),), fetch=True)
-    if res and res[0][0] != "0":
-        try: await bot.send_message(int(res[0][0]), f"<b>🛡 LOG:</b> {text}")
-        except: pass
-
-# --- ADMIN PANEL ---
+# --- MENU UTAMA ---
 @dp.message(Command("start"), F.chat.type == "private")
 async def admin_menu(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📍 Set Grup (Info)", callback_data="guide_group")],
-        [InlineKeyboardButton(text="📝 Set Welcome", callback_data="set_welcome"), InlineKeyboardButton(text="🚫 Set Filter", callback_data="set_filter")],
-        [InlineKeyboardButton(text="📢 Broadcast", callback_data="bc"), InlineKeyboardButton(text="🔔 Tag All (Pin)", callback_data="tagall")],
-        [InlineKeyboardButton(text="📊 Group Logs", callback_data="group_logs"), InlineKeyboardButton(text="💾 Send DB", callback_data="send_db")]
+        [InlineKeyboardButton(text="📍 Set Target Grup", callback_data="guide_group")],
+        [InlineKeyboardButton(text="📜 Set Grup Log", callback_data="guide_log")],
+        [InlineKeyboardButton(text="📝 Set Welcome", callback_data="set_welcome")],
+        [InlineKeyboardButton(text="🚫 Set Filter Kata", callback_data="set_filter")],
+        [InlineKeyboardButton(text="📢 Broadcast", callback_data="bc")],
+        [InlineKeyboardButton(text="💾 Send DB (Backup)", callback_data="send_db")]
     ])
-    await message.answer("🛡 <b>ADMIN PANEL</b>\nKelola grup Anda melalui tombol di bawah:", reply_markup=kb)
+    await message.answer("🛡️ **Super Admin Panel**", reply_markup=kb)
 
-# --- BROADCAST & TAGALL LOGIC ---
+# --- SET GRUP (TARGET & LOG) ---
+@dp.message(Command("setgrup"))
+async def set_group_id(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    gid = str(message.chat.id)
+    db_query("UPDATE settings SET value = ? WHERE key = 'group_id'", (gid,))
+    rep = await message.answer(f"✅ Grup TARGET terdaftar: {gid}")
+    await asyncio.sleep(3)
+    await message.delete()
+    await rep.delete()
+
+@dp.message(Command("setlog"))
+async def set_log_id(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    gid = str(message.chat.id)
+    db_query("UPDATE settings SET value = ? WHERE key = 'log_group_id'", (gid,))
+    rep = await message.answer(f"✅ Grup LOG terdaftar: {gid}")
+    await asyncio.sleep(3)
+    await message.delete()
+    await rep.delete()
+
+# --- FITUR TAG ALL ---
+@dp.message(Command("tagall"), F.chat.type.in_({"group", "supergroup"}))
+@dp.message(F.text.contains("@all"), F.chat.type.in_({"group", "supergroup"}))
+async def tag_all_members(message: types.Message):
+    # Hanya admin grup atau admin bot yang bisa tag all
+    chat_admins = await bot.get_chat_administrators(message.chat.id)
+    admin_ids = [admin.user.id for admin in chat_admins]
+    
+    if message.from_user.id not in admin_ids and message.from_user.id != ADMIN_ID:
+        return
+
+    # Ambil info member (hanya bisa scan member yang terlihat/aktif bagi bot)
+    # Catatan: API Bot Telegram punya limitasi untuk list semua member, 
+    # di sini kita menggunakan mention sederhana.
+    await message.answer("📣 **Memanggil semua member...**")
+    # Logika tag all biasanya menggunakan t.me/username atau parse_mode 
+    # Karena bot tidak bisa narik ribuan user sekaligus, ini template panggilannya:
+    await message.answer("‼️ ATTENTION ALL MEMBERS ‼️\n\nSilahkan cek pesan di atas.")
+
+# --- FILTER CHAT + AUTO MUTE + LOGS ---
+warn_count = {}
+
+@dp.message(F.chat.type.in_({"group", "supergroup"}))
+async def filter_monitor(message: types.Message):
+    target_group = db_query("SELECT value FROM settings WHERE key = 'group_id'", fetch=True)[0][0]
+    log_group = db_query("SELECT value FROM settings WHERE key = 'log_group_id'", fetch=True)[0][0]
+    
+    if str(message.chat.id) != target_group: return
+    if message.from_user.id == ADMIN_ID: return 
+
+    banned_words = [row[0] for row in db_query("SELECT word FROM filters", fetch=True)]
+    if message.text and any(w in message.text.lower() for w in banned_words):
+        uid = message.from_user.id
+        uname = message.from_user.full_name
+        warn_count[uid] = warn_count.get(uid, 0) + 1
+        
+        await message.delete() 
+
+        if warn_count[uid] >= 2:
+            await bot.restrict_chat_member(message.chat.id, uid, permissions=types.ChatPermissions(can_send_messages=False))
+            await message.answer(f"🔇 {uname} di-mute karena melanggar filter 2x.")
+            
+            # Kirim Logs ke grup log jika sudah diset
+            if log_group != "0":
+                try:
+                    await bot.send_message(log_group, f"🚫 **LOG MUTE**\n\n<b>User:</b> {uname} ({uid})\n<b>Alasan:</b> Toxic/Banned Words\n<b>Status:</b> Mute Permanen")
+                except: pass
+        else:
+            await message.answer(f"⚠️ {uname}, jangan bicara kasar! (Peringatan 1/2)")
+
+# --- FITUR BROADCAST ---
 @dp.callback_query(F.data == "bc")
-async def bc_start(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("📢 <b>BROADCAST</b>\nKirim pesan yang ingin dikirim ke grup:")
+async def start_bc(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("Kirim pesan yang ingin di-broadcast ke grup:")
     await state.set_state(AdminStates.waiting_bc_text)
     await callback.answer()
 
 @dp.message(AdminStates.waiting_bc_text)
-async def bc_exec(message: types.Message, state: FSMContext):
-    gid = SETTINGS_CACHE.get('group_id', '0')
-    if gid == '0': return await message.answer("❌ Grup belum diset. Gunakan /setgrup di grup target.")
+async def do_broadcast(message: types.Message, state: FSMContext):
+    gid = db_query("SELECT value FROM settings WHERE key = 'group_id'", fetch=True)[0][0]
     try:
-        await bot.send_message(int(gid), message.text)
-        await message.answer("✅ Broadcast terkirim sebagai chat biasa.")
-    except Exception as e: await message.answer(f"❌ Gagal: {e}")
+        await bot.send_message(gid, message.text)
+        await message.answer("✅ Pesan broadcast berhasil dikirim ke grup.")
+    except Exception as e:
+        await message.answer(f"❌ Gagal kirim: {e}")
     await state.clear()
 
-@dp.callback_query(F.data == "tagall")
-async def tagall_start(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("🔔 <b>TAG ALL</b>\nKirim pesan yang akan dikirim & di-PIN (Notif ke semua):")
-    await state.set_state(AdminStates.waiting_tagall_text)
-    await callback.answer()
-
-@dp.message(AdminStates.waiting_tagall_text)
-async def tagall_exec(message: types.Message, state: FSMContext):
-    gid = SETTINGS_CACHE.get('group_id', '0')
-    try:
-        msg = await bot.send_message(int(gid), f"🔔 <b>PENGUMUMAN</b>\n\n{message.text}")
-        await bot.pin_chat_message(int(gid), msg.message_id)
-        await message.answer("✅ TagAll berhasil (Pesan dikirim & di-Pin).")
-    except Exception as e: await message.answer(f"❌ Gagal: {e}")
-    await state.clear()
-
-# --- SETTINGS (GROUPS, WELCOME, LOGS) ---
-@dp.message(Command("setgrup"))
-async def set_group(message: types.Message):
-    if message.from_user.id != ADMIN_ID: return
-    gid = str(message.chat.id)
-    await db_query("UPDATE settings SET value = ? WHERE key = 'group_id'", (gid,))
-    await refresh_cache()
-    await message.answer(f"✅ <b>Grup Target Diset:</b> <code>{gid}</code>")
-
-@dp.message(Command("setlog"))
-async def set_log_cmd(message: types.Message):
-    if message.from_user.id != ADMIN_ID: return
-    args = message.text.split()
-    if len(args) < 2: return await message.answer("Format: <code>/setlog ID_LOG</code>")
-    await db_query("INSERT OR REPLACE INTO group_logs VALUES (?, ?)", (str(message.chat.id), args[1]))
-    await message.answer(f"✅ <b>Log Target Diset:</b> <code>{args[1]}</code>")
-
-@dp.callback_query(F.data == "set_welcome")
-async def welcome_start(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("📝 Kirim teks welcome baru:")
-    await state.set_state(AdminStates.waiting_welcome_text)
-    await callback.answer()
-
-@dp.message(AdminStates.waiting_welcome_text)
-async def welcome_save(message: types.Message, state: FSMContext):
-    await db_query("UPDATE settings SET value = ? WHERE key = 'welcome_text'", (message.text,))
-    await refresh_cache()
-    await message.answer("✅ Welcome text disimpan!")
-    await state.clear()
-
-@dp.callback_query(F.data == "group_logs")
-async def show_logs(callback: types.CallbackQuery):
-    logs = await db_query("SELECT * FROM group_logs", fetch=True)
-    txt = "📊 <b>DAFTAR LOG:</b>\n\n"
-    for g, l in logs: txt += f"Grup: <code>{g}</code> → Log: <code>{l}</code>\n"
-    await callback.message.answer(txt or "Kosong.")
-    await callback.answer()
-
-@dp.callback_query(F.data == "send_db")
-async def send_db_file(callback: types.CallbackQuery):
-    if os.path.exists("database.db"):
-        await callback.message.answer_document(FSInputFile("database.db"), caption="💾 Backup Database")
-    else: await callback.message.answer("❌ File DB tidak ditemukan.")
-    await callback.answer()
-
-@dp.callback_query(F.data == "guide_group")
-async def guide_group(callback: types.CallbackQuery):
-    await callback.message.answer("💡 <b>CARA SET GRUP:</b>\n1. Masukkan bot ke grup.\n2. Jadikan Admin.\n3. Ketik <code>/setgrup</code> di grup tersebut.")
-    await callback.answer()
-
+# --- FITUR SET FILTER ---
 @dp.callback_query(F.data == "set_filter")
-async def filter_start(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("🚫 Kirim kata kasar yang ingin dilarang:")
+async def start_filter(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("Kirim kata kasar yang ingin ditambah ke filter:")
     await state.set_state(AdminStates.waiting_filter_word)
     await callback.answer()
 
 @dp.message(AdminStates.waiting_filter_word)
-async def filter_save(message: types.Message, state: FSMContext):
-    await db_query("INSERT OR IGNORE INTO filters (word) VALUES (?)", (message.text.lower().strip(),))
-    await refresh_cache()
-    await message.answer(f"✅ Filter <code>{message.text}</code> ditambahkan.")
+async def save_filter(message: types.Message, state: FSMContext):
+    word = message.text.lower()
+    try:
+        db_query("INSERT INTO filters (word) VALUES (?)", (word,))
+        await message.answer(f"✅ Kata <code>{word}</code> berhasil ditambah!")
+    except:
+        await message.answer("Kata tersebut sudah ada dalam daftar.")
     await state.clear()
 
-# --- SECURITY & AUTO MUTE ---
-@dp.message(F.chat.type.in_({"group", "supergroup"}))
-async def security_handler(message: types.Message):
-    gid = str(message.chat.id)
-    if gid != SETTINGS_CACHE.get('group_id'): return
-    if message.from_user.id == ADMIN_ID or message.from_user.is_bot: return
+# --- WELCOME SYSTEM ---
+@dp.callback_query(F.data == "set_welcome")
+async def start_welcome(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("Kirim teks welcome baru:")
+    await state.set_state(AdminStates.waiting_welcome_text)
+    await callback.answer()
 
-    text = (message.text or message.caption or "").lower()
-    for word in FILTER_CACHE:
-        if word in text:
-            await message.delete()
-            user_violations[message.from_user.id] += 1
-            count = user_violations[message.from_user.id]
-            
-            if count >= 2:
-                try:
-                    await bot.restrict_chat_member(message.chat.id, message.from_user.id, permissions=ChatPermissions(can_send_messages=False))
-                    await message.answer(f"🚫 {message.from_user.mention_html()} <b>DI-MUTE</b> (Pelanggaran 2x)")
-                    await send_to_log(gid, f"User {message.from_user.id} di-mute karena filter.")
-                except: pass
-            else:
-                await message.answer(f"⚠️ {message.from_user.mention_html()}, jangan bicara kasar! (Peringatan 1/2)")
-            return
+@dp.message(AdminStates.waiting_welcome_text)
+async def save_welcome_text(message: types.Message, state: FSMContext):
+    db_query("UPDATE settings SET value = ? WHERE key = 'welcome_text'", (message.text,))
+    await message.answer("Teks disimpan! Sekarang kirim tombol (Nama|Link):")
+    await state.set_state(AdminStates.waiting_welcome_btn)
 
-@dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
-async def welcome_handler(event: types.ChatMemberUpdated):
-    if str(event.chat.id) != SETTINGS_CACHE.get('group_id'): return
-    mention = event.new_chat_member.user.mention_html()
-    txt = SETTINGS_CACHE.get('welcome_text', 'Selamat datang!').replace("{mention}", mention)
-    await bot.send_message(event.chat.id, txt)
+@dp.message(AdminStates.waiting_welcome_btn)
+async def save_welcome_btn(message: types.Message, state: FSMContext):
+    db_query("UPDATE settings SET value = ? WHERE key = 'welcome_btn'", (message.text,))
+    await message.answer("✅ Welcome & Tombol diupdate!")
+    await state.clear()
 
-# --- START ---
+@dp.chat_member()
+async def on_user_join(event: types.ChatMemberUpdated):
+    target_group = db_query("SELECT value FROM settings WHERE key = 'group_id'", fetch=True)[0][0]
+    if str(event.chat.id) != target_group: return
+
+    if event.new_chat_member.status == "member" and event.old_chat_member.status != "member":
+        user = event.new_chat_member.user
+        mention = f'<a href="tg://user?id={user.id}">{user.full_name}</a> (<code>{user.id}</code>) @{user.username}'
+        
+        txt = db_query("SELECT value FROM settings WHERE key = 'welcome_text'", fetch=True)[0][0]
+        btn_data = db_query("SELECT value FROM settings WHERE key = 'welcome_btn'", fetch=True)[0][0].split("|")
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=btn_data[0], url=btn_data[1])]])
+        wel_msg = await bot.send_message(event.chat.id, f"Halo {mention}!\n\n{txt}", reply_markup=kb)
+        
+        await bot.send_message(ADMIN_ID, f"👁️ **Mata Elang:** {mention} baru saja bergabung.")
+        
+        await asyncio.sleep(10)
+        try: await wel_msg.delete()
+        except: pass
+
+# --- OTHER BUTTONS ---
+@dp.callback_query(F.data == "guide_group")
+async def guide(c: types.CallbackQuery):
+    await c.message.answer("Masuk ke grup UTAMA, jadikan bot admin, lalu ketik `/setgrup` di grup tersebut.")
+    await c.answer()
+
+@dp.callback_query(F.data == "guide_log")
+async def guide_log(c: types.CallbackQuery):
+    await c.message.answer("Masuk ke grup LOGS (bisa grup admin), jadikan bot admin, lalu ketik `/setlog` di grup tersebut.")
+    await c.answer()
+
+@dp.callback_query(F.data == "send_db")
+async def send_db(c: types.CallbackQuery):
+    await bot.send_document(ADMIN_ID, FSInputFile("database.db"), caption="Backup DB")
+    await c.answer()
+
 async def main():
-    await init_db()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
